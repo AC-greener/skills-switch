@@ -24,6 +24,7 @@ This repo builds a native macOS app for managing `SKILL.md` libraries across AI 
 - Use `@Observable` for shared app-owned state and `@State` for view-local state.
 - Make sync source-of-truth and conflict rules explicit before changing behavior.
 
+
 ## File System And Watchers
 
 - Use `FSEventStream` for directory-tree monitoring.
