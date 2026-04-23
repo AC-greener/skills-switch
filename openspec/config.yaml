@@ -25,7 +25,7 @@ context: |
   - 语言：Swift 6，启用严格并发（strict concurrency）
   - UI：SwiftUI，最低支持 macOS 14 Sonoma
   - 数据库：GRDB.swift（SQLite 封装，存储元数据、快照、同步状态）
-  - 文件监听：FSEvents（通过 DispatchSource.makeFileSystemObjectSource）
+  - 文件监听：目录树监听使用 FSEvents / FSEventStream；仅在单文件或单目录级别的补充监听场景下使用 DispatchSource.makeFileSystemObjectSource
   - Frontmatter 解析：Yams（YAML 解析）+ 自实现 SKILL.md 解析器
   - Diff：Swift 标准库 CollectionDifference
   - 序列化：Codable（标准库）
@@ -39,19 +39,20 @@ context: |
   - 数据层：GRDB（元数据）+ FileManager（skill 文件，磁盘为 source of truth）
 
   ## macOS 系统集成
-  - Security-Scoped Bookmarks：持久化用户授权的目录访问权限
+  - 不使用 App Sandbox：默认按非 sandbox 桌面应用设计
+  - Security-Scoped Bookmarks：用于记住用户通过系统选择器授予的目录位置，并在重启后恢复目录解析上下文；不要将其表述为 App Sandbox 权限续租机制
   - Keychain：存储敏感配置（如未来的远程同步凭证）
   - MenuBar（NSStatusItem）：常驻状态栏，显示同步状态，提供快速操作
-  - 不使用 App Sandbox（需要访问任意 agent skill 目录）
   - 最低部署目标：macOS 14.0
 
   ## 代码约定
   - 使用 @Observable 宏，不用 ObservableObject
   - 全程 async/await，禁止 DispatchQueue 手动调度（FSEvents 回调除外）
-  - 使用类型化错误（typed throws），不用 any Error 裸抛
+  - Service 和领域层公开接口优先使用类型化错误（typed throws）；系统 API、文件系统、数据库和第三方库错误允许在边界层包装或桥接后再向上抛出
   - 除非 SwiftUI 无对应组件，否则不引入 AppKit
   - 提交格式：Conventional Commits（feat/fix/chore/refactor/docs）
   - Skill 文件内容保留在磁盘，GRDB 只存索引和元数据，不存文件正文
+  - 所有路径相关设计须明确 source of truth、规范化策略（absolute path / symlink resolution）以及失败时的用户可见反馈
 
 rules:
   proposal:
@@ -59,12 +60,17 @@ rules:
     - 说明影响哪些 Agent 适配逻辑（Claude Code / Codex / Gemini / Cursor）
     - 必须包含"非目标（Non-goals）"章节，防止范围蔓延
     - 如变更需要新的 macOS 权限或 entitlement，必须在提案中标注
+    - 涉及同步、导入、删除、重命名或目录授权的变更，必须明确用户触发路径和失败后的回退策略
+    - 涉及监听或自动同步的变更，必须说明它是增量增强、行为修正，还是规则重定义
 
   specs:
     - 所有验收场景使用 Given/When/Then 格式
     - 文件系统操作场景须写明完整路径和预期目录结构
-    - 同步行为须明确定义冲突解决规则（symlink 优先 / 文件内容对比 / 时间戳）
-    - 涉及 Security-Scoped Bookmark 的场景须说明权限获取和持久化时机
+    - 同步行为必须明确回答：source of truth 是谁、如何识别已同步项、何时创建 symlink、何时降级为文件拷贝、何时拒绝覆盖
+    - 冲突规则必须明确回答：symlink、普通文件、坏链、缺失文件、重名目录、双端同时修改分别如何处理
+    - 涉及内容对比时，必须说明以内容哈希、文件元数据还是时间戳为准；若时间戳仅作优化，也须明确写出
+    - 涉及 Security-Scoped Bookmark 的场景须说明目录选择时机、持久化时机、失效检测方式，以及失效后的用户提示与恢复流程
+    - 涉及删除、重命名、迁移或首次导入时，必须定义是否可逆、是否保留备份，以及用户确认条件
 
   design:
     - 新增 Service 须说明其与现有 Service 的依赖关系和调用方向
@@ -72,6 +78,10 @@ rules:
     - 同步机制优先使用 symlink；选择文件拷贝时须在设计文档中说明原因
     - SwiftUI 组件设计须遵循 macOS Human Interface Guidelines
     - FSEvents 监听范围变更须评估对性能和电池的影响
+    - 监听设计必须明确主监听机制、事件去抖/合并策略、初始扫描时机，以及如何避免同步写入触发自激循环
+    - 涉及路径持久化时，必须区分“恢复用户上次选择的目录定位”与“系统权限模型”，不要混用术语
+    - 错误处理设计必须说明哪些错误类型会跨层暴露，哪些错误在边界层被包装，并给出至少一个用户可见错误示例
+    - 涉及同步决策的设计必须给出状态机或决策表，至少覆盖首次同步、增量更新、冲突、回滚四类路径
 
   tasks:
     - 单个任务不超过 20～30 分钟工作量
@@ -79,3 +89,7 @@ rules:
     - 数据库 migration 始终作为独立任务，先于依赖它的功能任务
     - 每个任务须注明如何单独测试（单元测试 / UI 测试 / 手动验证）
     - 涉及 FileManager 或 FSEvents 的任务须包含错误路径的测试场景
+    - 涉及同步规则的任务必须拆分为：规则实现、冲突测试、回归验证，避免一个任务同时改规则和 UI
+    - 涉及 Bookmark、目录选择或路径恢复的任务必须包含失效 bookmark、目录被删除、目录被移动三类验证
+    - 涉及 watcher 的任务必须包含去抖、自触发抑制、应用冷启动后的首次扫描验证
+    - 若任务依赖人工验证，须写明触发步骤、样例目录、预期日志或 UI 反馈
