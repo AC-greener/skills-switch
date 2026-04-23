@@ -1,20 +1,81 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  # 项目：SkillSync
+  一款 macOS 原生桌面应用，用于统一管理跨 AI 代码 Agent 的 SKILL.md 技能文件。
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  ## 产品定位
+  SkillSync 是所有 agent skill 的单一数据源（Single Source of Truth）。
+  通过 symlink 或文件同步，将 skill 自动分发到各 Agent 所需的目录。
+
+  ## 支持的 Agent 及其 Skill 路径
+  - Claude Code:  全局 ~/.claude/skills/       项目级 .claude/skills/
+  - Codex CLI:    全局 ~/.codex/skills/         项目级 .agents/skills/
+  - Gemini CLI:   全局 ~/.gemini/skills/        项目级 .gemini/skills/
+  - Cursor:       全局 ~/.cursor/skills/        项目级 .cursor/skills/
+
+  ## Skill 格式（通用 SKILL.md 标准）
+  每个 skill 是一个目录，包含：
+  - SKILL.md（必须）：YAML frontmatter（name、description）+ Markdown 正文
+  - scripts/（可选）：可执行的辅助脚本
+  - references/（可选）：补充文档
+  - assets/（可选）：模板和二进制资源
+
+  ## 技术栈（纯 Swift）
+  - 语言：Swift 6，启用严格并发（strict concurrency）
+  - UI：SwiftUI，最低支持 macOS 14 Sonoma
+  - 数据库：GRDB.swift（SQLite 封装，存储元数据、快照、同步状态）
+  - 文件监听：FSEvents（通过 DispatchSource.makeFileSystemObjectSource）
+  - Frontmatter 解析：Yams（YAML 解析）+ 自实现 SKILL.md 解析器
+  - Diff：Swift 标准库 CollectionDifference
+  - 序列化：Codable（标准库）
+  - 自动更新：Sparkle framework
+  - 分发方式：直接分发（非 App Store），Hardened Runtime + Notarization
+
+  ## 架构分层
+  - SwiftUI Views：纯展示，不包含业务逻辑
+  - @Observable ViewModels：持有 UI 状态，调用 Service 层
+  - Service 层：SkillStore、SyncEngine、WatcherService、SnapshotService
+  - 数据层：GRDB（元数据）+ FileManager（skill 文件，磁盘为 source of truth）
+
+  ## macOS 系统集成
+  - Security-Scoped Bookmarks：持久化用户授权的目录访问权限
+  - Keychain：存储敏感配置（如未来的远程同步凭证）
+  - MenuBar（NSStatusItem）：常驻状态栏，显示同步状态，提供快速操作
+  - 不使用 App Sandbox（需要访问任意 agent skill 目录）
+  - 最低部署目标：macOS 14.0
+
+  ## 代码约定
+  - 使用 @Observable 宏，不用 ObservableObject
+  - 全程 async/await，禁止 DispatchQueue 手动调度（FSEvents 回调除外）
+  - 使用类型化错误（typed throws），不用 any Error 裸抛
+  - 除非 SwiftUI 无对应组件，否则不引入 AppKit
+  - 提交格式：Conventional Commits（feat/fix/chore/refactor/docs）
+  - Skill 文件内容保留在磁盘，GRDB 只存索引和元数据，不存文件正文
+
+rules:
+  proposal:
+    - 明确说明本次变更涉及哪一层（UI / ViewModel / Service / 数据层）
+    - 说明影响哪些 Agent 适配逻辑（Claude Code / Codex / Gemini / Cursor）
+    - 必须包含"非目标（Non-goals）"章节，防止范围蔓延
+    - 如变更需要新的 macOS 权限或 entitlement，必须在提案中标注
+
+  specs:
+    - 所有验收场景使用 Given/When/Then 格式
+    - 文件系统操作场景须写明完整路径和预期目录结构
+    - 同步行为须明确定义冲突解决规则（symlink 优先 / 文件内容对比 / 时间戳）
+    - 涉及 Security-Scoped Bookmark 的场景须说明权限获取和持久化时机
+
+  design:
+    - 新增 Service 须说明其与现有 Service 的依赖关系和调用方向
+    - 新增 GRDB 表或字段须包含 migration 策略（迁移版本号和 SQL）
+    - 同步机制优先使用 symlink；选择文件拷贝时须在设计文档中说明原因
+    - SwiftUI 组件设计须遵循 macOS Human Interface Guidelines
+    - FSEvents 监听范围变更须评估对性能和电池的影响
+
+  tasks:
+    - 单个任务不超过 20～30 分钟工作量
+    - UI 任务与 Service/数据层任务分开列出
+    - 数据库 migration 始终作为独立任务，先于依赖它的功能任务
+    - 每个任务须注明如何单独测试（单元测试 / UI 测试 / 手动验证）
+    - 涉及 FileManager 或 FSEvents 的任务须包含错误路径的测试场景
